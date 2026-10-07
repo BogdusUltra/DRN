@@ -5,7 +5,7 @@ import json
 import os
 
 def udp_beacon(drn_dir):
-    """Фоновый поток: шлет широковещательные пакеты, пока машина не авторизована."""
+    """Фоновый поток: шлет широковещательные пакеты."""
     config_path = os.path.join(drn_dir, "config.json")
     pubkey_path = os.path.join(drn_dir, "public.pem")
 
@@ -23,42 +23,42 @@ def udp_beacon(drn_dir):
         "public_key": pubkey
     }).encode('utf-8')
 
-    print("[*] Поток UDP-Маячка запущен (порт 50000)...")
     while True:
-        # В будущем: проверять, пустой ли whitelist, и если нет - останавливать маячок
         try:
             s.sendto(payload, ('255.255.255.255', 50000))
-        except Exception as e:
+        except Exception:
             pass
         time.sleep(2)
 
 def tcp_listener(drn_dir):
-    """Основной поток: слушает TCP порт 50001 для команд и Handshake."""
+    """Слушает TCP порт 50001 для команд и Handshake."""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    # Позволяет переиспользовать порт после перезапуска
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind(('0.0.0.0', 50001))
     s.listen(5)
     
-    print("[*] TCP Сервер запущен. Ожидание команд на порту 50001...")
-    
     while True:
-        conn, addr = s.accept()
-        print(f"[+] Входящее TCP подключение от: {addr[0]}")
-        # Здесь позже напишем логику приема Handshake и проверки подписи
-        conn.close()
+        try:
+            conn, addr = s.accept()
+            # Заглушка для обработки соединений
+            conn.close()
+        except Exception:
+            pass
 
-def start_agent_daemon():
-    home_dir = os.path.expanduser("~")
-    drn_dir = os.path.join(home_dir, ".drn_agent")
-    
+def start_agent_daemon(drn_dir):
+    """Главная функция фонового процесса. Запускает потоки и удерживает жизнь скрипта."""
     if not os.path.exists(drn_dir):
-        print("[-] Ошибка: Агент не инициализирован. Выполните 'drn init' сначала.")
         return
 
-    # Запускаем маячок в отдельном фоновом потоке
     beacon_thread = threading.Thread(target=udp_beacon, args=(drn_dir,), daemon=True)
     beacon_thread.start()
 
-    # Запускаем TCP сервер в главном потоке
-    tcp_listener(drn_dir)
+    tcp_thread = threading.Thread(target=tcp_listener, args=(drn_dir,), daemon=True)
+    tcp_thread.start()
+
+    # Бесконечный цикл, чтобы процесс не завершился сам по себе
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
