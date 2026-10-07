@@ -19,3 +19,6 @@ The system follows a separated Control Plane / Data Plane architecture, similar 
   - To Orchestrator: Fetch configs, send logs.
   - To other Nodes: Direct Peer-to-Peer (P2P) communication via **ZeroMQ** for passing data (images, matrices, etc.) to avoid bottlenecks.
 - **Tech**: Python, ZeroMQ, UDP Broadcasts (Discovery).
+
+---
+**Официальный репозиторий:** [https://github.com/BogdusUltra/DRN](https://github.com/BogdusUltra/DRN)
