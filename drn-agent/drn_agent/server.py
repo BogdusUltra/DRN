@@ -23,12 +23,14 @@ def udp_beacon(drn_dir):
         "public_key": pubkey
     }).encode('utf-8')
 
+    interval = config.get("beacon_interval", 2)
+
     while True:
         try:
             s.sendto(payload, ('255.255.255.255', 50000))
         except Exception:
             pass
-        time.sleep(2)
+        time.sleep(interval)
 
 def tcp_listener(drn_dir):
     """Слушает TCP порт 50001 для команд и Handshake."""

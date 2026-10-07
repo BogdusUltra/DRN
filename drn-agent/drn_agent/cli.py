@@ -29,13 +29,17 @@ def stop_daemon(pid_file):
     return True
 
 def main():
-    parser = argparse.ArgumentParser(description="DRN Agent CLI")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser = argparse.ArgumentParser(
+        description="DRN Agent CLI - Утилита для управления демоном узла Distributed Robotics Network.",
+        epilog="Используйте 'drn <command> --help' для получения справки по конкретной команде."
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True, title="Доступные команды")
 
     # drn init
     init_parser = subparsers.add_parser("init", help="Инициализация агента на новой машине")
-    init_parser.add_argument("--name", required=True, help="Уникальное имя машины")
+    init_parser.add_argument("--name", required=True, help="Уникальное имя машины (например, Rpi_Yard)")
     init_parser.add_argument("--password", required=True, help="Пароль для авторизации Оркестратора")
+    init_parser.add_argument("--beacon-interval", type=int, default=2, help="Опционально: Частота отправки UDP-маячка в секундах (по умолчанию: 2)")
 
     # drn start
     start_parser = subparsers.add_parser("start", help="Запустить процесс агента в фоновом режиме")
@@ -73,6 +77,7 @@ def main():
         config_data = {
             "name": args.name,
             "password_hash": hash_password(args.password),
+            "beacon_interval": args.beacon_interval,
             "whitelist": []
         }
         
