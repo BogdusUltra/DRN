@@ -32,6 +32,63 @@ def udp_beacon(drn_dir):
             pass
         time.sleep(interval)
 
+def handle_client(conn, addr, drn_dir):
+    """Обрабатывает входящее TCP-соединение (Handshake и команды)."""
+    try:
+        data = conn.recv(4096).decode('utf-8')
+        if not data:
+            return
+        
+        msg = json.loads(data)
+        config_path = os.path.join(drn_dir, "config.json")
+        privkey_path = os.path.join(drn_dir, "private.pem")
+
+        if msg.get("action") == "handshake":
+            orchestrator_pub = msg.get("orchestrator_pub_key")
+            auth_payload_b64 = msg.get("auth_payload")
+            
+            if not orchestrator_pub or not auth_payload_b64:
+                return
+
+            from .crypto import decrypt_rsa, encrypt_rsa, hash_password
+            import hashlib
+            
+            try:
+                decrypted_str = decrypt_rsa(auth_payload_b64, privkey_path)
+                auth_data = json.loads(decrypted_str)
+            except Exception as e:
+                # Ошибка расшифровки или неверный формат
+                return
+
+            with open(config_path, "r") as f:
+                config = json.load(f)
+            
+            # Проверка пароля
+            if hash_password(auth_data.get("p", "")) != config["password_hash"]:
+                return
+            
+            # Проверка привязки (binding) ключа
+            pub_hash = hashlib.sha256(orchestrator_pub.encode('utf-8')).hexdigest()
+            if auth_data.get("h") != pub_hash:
+                return
+            
+            # Успешная авторизация
+            if orchestrator_pub not in config["whitelist"]:
+                config["whitelist"].append(orchestrator_pub)
+                with open(config_path, "w") as f:
+                    json.dump(config, f, indent=4)
+            
+            # Отправка зашифрованного ответа Оркестратору
+            response_json = json.dumps({"status": "ok", "msg": "Handshake successful"})
+            encrypted_resp = encrypt_rsa(response_json, orchestrator_pub)
+            
+            conn.sendall(json.dumps({"encrypted_payload": encrypted_resp}).encode('utf-8'))
+
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
 def tcp_listener(drn_dir):
     """Слушает TCP порт 50001 для команд и Handshake."""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -42,8 +99,7 @@ def tcp_listener(drn_dir):
     while True:
         try:
             conn, addr = s.accept()
-            # Заглушка для обработки соединений
-            conn.close()
+            threading.Thread(target=handle_client, args=(conn, addr, drn_dir), daemon=True).start()
         except Exception:
             pass
 
