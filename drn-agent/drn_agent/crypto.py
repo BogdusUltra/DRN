@@ -33,3 +33,30 @@ def encrypt_rsa(plaintext: str, pubkey_pem: str) -> str:
     pubkey = rsa.PublicKey.load_pkcs1(pubkey_pem.encode('utf-8'))
     encrypted_bytes = rsa.encrypt(plaintext.encode('utf-8'), pubkey)
     return base64.b64encode(encrypted_bytes).decode('utf-8')
+def decrypt_large_rsa(b64_enc: str, privkey_path: str) -> str:
+    """Расшифровывает длинные сообщения, разбитые на блоки (chunked RSA)."""
+    import base64
+    with open(privkey_path, 'rb') as f:
+        privkey = rsa.PrivateKey.load_pkcs1(f.read())
+    
+    data = base64.b64decode(b64_enc)
+    # Размер блока RSA-2048 после шифрования всегда 256 байт
+    chunks = [data[i:i+256] for i in range(0, len(data), 256)]
+    dec_chunks = []
+    for chunk in chunks:
+        dec_chunks.append(rsa.decrypt(chunk, privkey))
+    return b"".join(dec_chunks).decode('utf-8')
+
+def encrypt_large_rsa(plaintext: str, pubkey_pem: str) -> str:
+    """Шифрует длинные сообщения блоками для обхода лимита RSA."""
+    import base64
+    pubkey = rsa.PublicKey.load_pkcs1(pubkey_pem.encode('utf-8'))
+    data = plaintext.encode('utf-8')
+    # Лимит для 2048-битного ключа (с запасом) = 200 байт
+    chunks = [data[i:i+200] for i in range(0, len(data), 200)]
+    enc_chunks = []
+    for chunk in chunks:
+        enc_chunks.append(rsa.encrypt(chunk, pubkey))
+    
+    full_enc = b"".join(enc_chunks)
+    return base64.b64encode(full_enc).decode('utf-8')

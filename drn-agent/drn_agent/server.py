@@ -84,8 +84,42 @@ def handle_client(conn, addr, drn_dir):
             
             conn.sendall(json.dumps({"encrypted_payload": encrypted_resp}).encode('utf-8'))
 
-    except Exception:
-        pass
+        # Обработка команд после Handshake
+        if "encrypted_command" in msg:
+            from .crypto import decrypt_large_rsa, encrypt_large_rsa
+            try:
+                decrypted_str = decrypt_large_rsa(msg["encrypted_command"], privkey_path)
+                cmd_data = json.loads(decrypted_str)
+            except Exception:
+                return
+            
+            with open(config_path, "r") as f:
+                config = json.load(f)
+            
+            # Проверяем, что оркестратор авторизован
+            orch_pub = cmd_data.get("orchestrator_pub_key")
+            if orch_pub not in config["whitelist"]:
+                return
+            
+            action = cmd_data.get("action")
+            response_payload = {"status": "ok"}
+            
+            if action == "terminal_cmd":
+                cmd = cmd_data.get("cmd")
+                import subprocess
+                try:
+                    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
+                    response_payload["stdout"] = result.stdout
+                    response_payload["stderr"] = result.stderr
+                    response_payload["returncode"] = result.returncode
+                except Exception as e:
+                    response_payload["error"] = str(e)
+            else:
+                response_payload["error"] = "Unknown action"
+            
+            # Шифруем ответ публичным ключом Оркестратора
+            enc_resp = encrypt_large_rsa(json.dumps(response_payload), orch_pub)
+            conn.sendall(json.dumps({"encrypted_payload": enc_resp}).encode('utf-8'))
     finally:
         conn.close()
 
