@@ -5,7 +5,7 @@ import time
 import threading
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, 
-                             QTreeWidget, QTreeWidgetItem, QTextEdit, QMessageBox)
+                             QTreeWidget, QTreeWidgetItem, QTextEdit, QMessageBox, QInputDialog, QComboBox)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QColor
 from client import DRNClient
@@ -39,28 +39,33 @@ class UDPListenerThread(QThread):
 class HandshakeThread(QThread):
     finished = pyqtSignal(str, bool)
 
-    def __init__(self, client, ip, pubkey):
+    def __init__(self, client, ip, pubkey, password):
         super().__init__()
         self.client = client
         self.ip = ip
         self.pubkey = pubkey
+        self.password = password
 
     def run(self):
-        success = self.client.handshake(self.ip, self.pubkey)
+        success = self.client.handshake(self.ip, self.pubkey, self.password)
         self.finished.emit(self.ip, success)
 
 class CommandThread(QThread):
     finished = pyqtSignal(dict)
 
-    def __init__(self, client, ip, pubkey, command):
+    def __init__(self, client, ip, pubkey, command, is_text=False):
         super().__init__()
         self.client = client
         self.ip = ip
         self.pubkey = pubkey
         self.command = command
+        self.is_text = is_text
 
     def run(self):
-        resp = self.client.send_command(self.ip, self.pubkey, self.command)
+        if self.is_text:
+            resp = self.client.send_text(self.ip, self.pubkey, self.command)
+        else:
+            resp = self.client.send_command(self.ip, self.pubkey, self.command)
         self.finished.emit(resp)
 
 class DRNStudioApp(QMainWindow):
@@ -70,7 +75,7 @@ class DRNStudioApp(QMainWindow):
         self.resize(900, 600)
         
         self.nodes = {}
-        self.client = None
+        self.client = DRNClient() # No longer takes password in constructor
         
         self.setup_ui()
         
@@ -89,16 +94,8 @@ class DRNStudioApp(QMainWindow):
 
         # Top Bar
         top_layout = QHBoxLayout()
-        top_layout.addWidget(QLabel("Password:"))
-        self.pass_entry = QLineEdit()
-        self.pass_entry.setEchoMode(QLineEdit.EchoMode.Password)
-        top_layout.addWidget(self.pass_entry)
         
-        btn_set_pass = QPushButton("Set Password")
-        btn_set_pass.clicked.connect(self.set_password)
-        top_layout.addWidget(btn_set_pass)
-
-        btn_hs = QPushButton("Handshake Selected")
+        btn_hs = QPushButton("Connect (Handshake)")
         btn_hs.clicked.connect(self.do_handshake)
         top_layout.addWidget(btn_hs)
 
@@ -127,6 +124,11 @@ class DRNStudioApp(QMainWindow):
         term_layout.addWidget(self.terminal)
 
         cmd_layout = QHBoxLayout()
+        
+        self.action_combo = QComboBox()
+        self.action_combo.addItems(["Terminal Command", "Echo Text"])
+        cmd_layout.addWidget(self.action_combo)
+
         self.cmd_entry = QLineEdit()
         self.cmd_entry.returnPressed.connect(self.send_command)
         cmd_layout.addWidget(self.cmd_entry)
@@ -145,12 +147,6 @@ class DRNStudioApp(QMainWindow):
         # Scroll to bottom
         scrollbar = self.terminal.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
-
-    def set_password(self):
-        password = self.pass_entry.text()
-        if not password: return
-        self.client = DRNClient(password)
-        self.log("[*] Password set. Ready for Handshake.")
 
     def on_node_discovered(self, ip, name, pubkey):
         if ip not in self.nodes:
@@ -216,14 +212,15 @@ class DRNStudioApp(QMainWindow):
     def do_handshake(self):
         ip = self.get_selected_ip()
         if not ip: return
-        if not self.client:
-            QMessageBox.warning(self, "Warning", "Please set the password first.")
+        
+        password, ok = QInputDialog.getText(self, "Connect to Agent", f"Enter password for {ip}:", QLineEdit.EchoMode.Password)
+        if not ok or not password:
             return
             
         data = self.nodes[ip]
         self.log(f"[*] Initiating Handshake with {ip}...")
         
-        self.hs_thread = HandshakeThread(self.client, ip, data["pubkey"])
+        self.hs_thread = HandshakeThread(self.client, ip, data["pubkey"], password)
         self.hs_thread.finished.connect(self.on_handshake_finished)
         self.hs_thread.start()
 
@@ -233,7 +230,7 @@ class DRNStudioApp(QMainWindow):
                 self.nodes[ip]["auth"] = True
             self.log(f"[+] Handshake SUCCESS with {ip}!")
         else:
-            self.log(f"[-] Handshake FAILED with {ip}.")
+            self.log(f"[-] Handshake FAILED with {ip}. Wrong password?")
         self.refresh_list()
 
     def delete_node(self):
@@ -254,25 +251,27 @@ class DRNStudioApp(QMainWindow):
         if not cmd: return
         self.cmd_entry.clear()
         
-        if not self.nodes[ip]["auth"]:
-            self.log("[-] Agent is not authorized! Do handshake first.")
-            return
-            
-        self.log(f"\n> {cmd} (to {ip})")
+        is_text = self.action_combo.currentText() == "Echo Text"
         
-        self.cmd_thread = CommandThread(self.client, ip, self.nodes[ip]["pubkey"], cmd)
+        action_name = "Text" if is_text else "Command"
+        self.log(f"\n> [{action_name}] {cmd} (to {ip})")
+        
+        self.cmd_thread = CommandThread(self.client, ip, self.nodes[ip]["pubkey"], cmd, is_text)
         self.cmd_thread.finished.connect(self.on_command_finished)
         self.cmd_thread.start()
 
     def on_command_finished(self, resp):
         if "error" in resp:
-            self.log(f"[-] Error: {resp['error']}")
+            self.log(f"<span style='color:red'>[-] Error: {resp['error']}</span>")
+        elif "text" in resp:
+            self.log(f"[+] Echo: {resp['text']}")
         else:
             if resp.get("stdout"):
                 self.log(resp["stdout"].strip())
             if resp.get("stderr"):
                 self.log(f"<span style='color:red'>[!] STDERR: {resp['stderr'].strip()}</span>")
-            self.log(f"[+] Return code: {resp.get('returncode')}")
+            if "returncode" in resp:
+                self.log(f"[+] Return code: {resp.get('returncode')}")
 
     def closeEvent(self, event):
         self.udp_thread.stop()

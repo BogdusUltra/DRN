@@ -96,26 +96,29 @@ def handle_client(conn, addr, drn_dir):
             with open(config_path, "r") as f:
                 config = json.load(f)
             
-            # Проверяем, что оркестратор авторизован
             orch_pub = cmd_data.get("orchestrator_pub_key")
-            if orch_pub not in config["whitelist"]:
-                return
-            
-            action = cmd_data.get("action")
             response_payload = {"status": "ok"}
             
-            if action == "terminal_cmd":
-                cmd = cmd_data.get("cmd")
-                import subprocess
-                try:
-                    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
-                    response_payload["stdout"] = result.stdout
-                    response_payload["stderr"] = result.stderr
-                    response_payload["returncode"] = result.returncode
-                except Exception as e:
-                    response_payload["error"] = str(e)
+            # Проверяем, что оркестратор авторизован
+            if orch_pub not in config["whitelist"]:
+                response_payload = {"status": "error", "error": "Unauthorized"}
             else:
-                response_payload["error"] = "Unknown action"
+                action = cmd_data.get("action")
+                
+                if action == "terminal_cmd":
+                    cmd = cmd_data.get("cmd")
+                    import subprocess
+                    try:
+                        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
+                        response_payload["stdout"] = result.stdout
+                        response_payload["stderr"] = result.stderr
+                        response_payload["returncode"] = result.returncode
+                    except Exception as e:
+                        response_payload["error"] = str(e)
+                elif action == "echo":
+                    response_payload["text"] = cmd_data.get("text")
+                else:
+                    response_payload["error"] = "Unknown action"
             
             # Шифруем ответ публичным ключом Оркестратора
             enc_resp = encrypt_large_rsa(json.dumps(response_payload), orch_pub)
