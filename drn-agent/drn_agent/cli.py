@@ -82,6 +82,10 @@ def main():
         print(f"[+] Инициализация успешно завершена! Машина: {args.name}")
     
     elif args.command == "start":
+        if not os.path.exists(os.path.join(drn_dir, "config.json")):
+            print("[-] Ошибка: Агент не инициализирован. Сначала выполните 'drn init'.")
+            return
+
         if os.path.exists(pid_file):
             print("[-] Агент уже запущен! Если это ошибка, выполните 'drn stop'.")
             return
