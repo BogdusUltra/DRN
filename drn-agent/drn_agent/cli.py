@@ -3,6 +3,7 @@ import sys
 import os
 import json
 from .crypto import generate_keys, hash_password
+from .server import start_agent_daemon
 
 def main():
     parser = argparse.ArgumentParser(description="DRN Agent CLI")
@@ -19,24 +20,19 @@ def main():
     args = parser.parse_args()
 
     if args.command == "init":
-        # Определяем домашнюю директорию (~/.drn_agent)
         home_dir = os.path.expanduser("~")
         drn_dir = os.path.join(home_dir, ".drn_agent")
-        
-        # Создаем папку, если ее нет
         os.makedirs(drn_dir, exist_ok=True)
         
         print(f"[*] Генерация RSA ключей (2048 бит) в директории {drn_dir}...")
         generate_keys(drn_dir)
         
-        # Создаем конфигурацию
         config_data = {
             "name": args.name,
             "password_hash": hash_password(args.password),
             "whitelist": []
         }
         
-        # Сохраняем конфиг
         with open(os.path.join(drn_dir, "config.json"), "w") as f:
             json.dump(config_data, f, indent=4)
             
@@ -46,8 +42,7 @@ def main():
     
     elif args.command == "start":
         print("[*] Запуск DRN Agent...")
-        print("[*] Включен режим Маячка (UDP Broadcast: 255.255.255.255:50000)")
-        print("[*] TCP Сервер запущен. Ожидание рукопожатия (Handshake) от Оркестратора на порту 50001...")
+        start_agent_daemon()
 
 if __name__ == "__main__":
     main()
