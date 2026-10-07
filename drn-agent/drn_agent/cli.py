@@ -92,8 +92,15 @@ def main():
             return
 
         if os.path.exists(pid_file):
-            print("[-] Агент уже запущен! Если это ошибка, выполните 'drn stop'.")
-            return
+            with open(pid_file, "r") as f:
+                try:
+                    pid = int(f.read())
+                    os.kill(pid, 0) # Check if process exists
+                    print("[-] Агент уже запущен! Если это ошибка, выполните 'drn stop'.")
+                    return
+                except (ValueError, ProcessLookupError, PermissionError):
+                    # Stale PID file, clean it up
+                    os.remove(pid_file)
         
         print("[*] Отправка агента в фоновый режим (Daemonize)...")
         subprocess.Popen([sys.argv[0], "_run_server"],

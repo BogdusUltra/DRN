@@ -2,7 +2,6 @@ import sys
 import socket
 import json
 import time
-import threading
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                              QTreeWidget, QTreeWidgetItem, QTextEdit, QMessageBox, QInputDialog, QComboBox)
@@ -35,6 +34,19 @@ class UDPListenerThread(QThread):
 
     def stop(self):
         self.running = False
+
+class PingThread(QThread):
+    finished = pyqtSignal(str, dict)
+
+    def __init__(self, client, ip, pubkey):
+        super().__init__()
+        self.client = client
+        self.ip = ip
+        self.pubkey = pubkey
+
+    def run(self):
+        resp = self.client.send_ping(self.ip, self.pubkey)
+        self.finished.emit(self.ip, resp)
 
 class HandshakeThread(QThread):
     finished = pyqtSignal(str, bool)
@@ -71,11 +83,12 @@ class CommandThread(QThread):
 class DRNStudioApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("DRN Studio (PyQt6)")
+        self.setWindowTitle("DRN Studio (Pull Architecture)")
         self.resize(900, 600)
         
         self.nodes = {}
-        self.client = DRNClient() # No longer takes password in constructor
+        self.client = DRNClient()
+        self.ping_threads = []
         
         self.setup_ui()
         
@@ -84,8 +97,8 @@ class DRNStudioApp(QMainWindow):
         self.udp_thread.start()
 
         self.timer = QTimer()
-        self.timer.timeout.connect(self.refresh_list)
-        self.timer.start(1000)
+        self.timer.timeout.connect(self.ping_loop)
+        self.timer.start(2000)
 
     def setup_ui(self):
         central = QWidget()
@@ -144,17 +157,79 @@ class DRNStudioApp(QMainWindow):
 
     def log(self, msg):
         self.terminal.append(msg)
-        # Scroll to bottom
         scrollbar = self.terminal.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
     def on_node_discovered(self, ip, name, pubkey):
+        # Check if the agent simply changed its IP address (e.g. DHCP or VM restart)
+        existing_ip = None
+        for known_ip, data in self.nodes.items():
+            if data["pubkey"] == pubkey and known_ip != ip:
+                existing_ip = known_ip
+                break
+                
+        if existing_ip:
+            self.log(f"[*] Agent {name} changed IP from {existing_ip} to {ip}")
+            node_data = self.nodes.pop(existing_ip)
+            self.nodes[ip] = node_data
+            if node_data["item"]:
+                node_data["item"].setText(0, ip)
+                
         if ip not in self.nodes:
-            self.nodes[ip] = {"name": name, "pubkey": pubkey, "last_seen": time.time(), "auth": False, "item": None}
-            self.log(f"[+] Discovered new agent: {name} ({ip})")
+            self.nodes[ip] = {
+                "name": name, 
+                "pubkey": pubkey, 
+                "last_seen": time.time(), 
+                "auth_status": "unknown", 
+                "item": None,
+                "is_pinging": False
+            }
+            self.log(f"[+] Discovered agent: {name} ({ip}). Checking auth...")
+            self.spawn_ping(ip)
             self.refresh_list()
         else:
+            if self.nodes[ip]["pubkey"] != pubkey:
+                self.log(f"[*] Agent {name} ({ip}) regenerated keys. Resetting auth...")
+                self.nodes[ip]["pubkey"] = pubkey
+                self.nodes[ip]["auth_status"] = "unknown"
+                self.spawn_ping(ip)
+            
+            # For unauth machines, we rely on UDP to keep them "Online" in the UI
+            if self.nodes[ip]["auth_status"] == "unauth":
+                self.nodes[ip]["last_seen"] = time.time()
+
+    def spawn_ping(self, ip):
+        self.nodes[ip]["is_pinging"] = True
+        thread = PingThread(self.client, ip, self.nodes[ip]["pubkey"])
+        thread.finished.connect(self.on_ping_finished)
+        thread.start()
+        # Clean up dead threads to prevent memory leak
+        self.ping_threads = [t for t in self.ping_threads if t.isRunning()]
+        self.ping_threads.append(thread)
+
+    def on_ping_finished(self, ip, resp):
+        if ip not in self.nodes: return
+        self.nodes[ip]["is_pinging"] = False
+        
+        if "error" in resp:
+            if resp["error"] == "Unauthorized":
+                self.nodes[ip]["auth_status"] = "unauth"
+                self.nodes[ip]["last_seen"] = time.time()
+            else:
+                pass # Connection failed or timeout, don't update last_seen
+        else:
+            self.nodes[ip]["auth_status"] = "auth"
             self.nodes[ip]["last_seen"] = time.time()
+            # Optional: log telemetry data
+            # tel = resp.get("telemetry", {})
+            
+        self.refresh_list()
+
+    def ping_loop(self):
+        for ip, data in self.nodes.items():
+            if data["auth_status"] == "auth" and not data["is_pinging"]:
+                self.spawn_ping(ip)
+        self.refresh_list()
 
     def refresh_list(self):
         now = time.time()
@@ -162,26 +237,29 @@ class DRNStudioApp(QMainWindow):
         
         for ip, data in self.nodes.items():
             age = now - data["last_seen"]
-            status_text = "Online"
-            color = QColor("#00FF00") # Green
+            status_text = "Checking..."
+            color = QColor("yellow")
             
-            if data["auth"]:
+            if data["auth_status"] == "auth":
                 if age > 10:
                     status_text = "Off(Auth)"
-                    color = QColor("#808080") # Gray
-                elif age > 3:
+                    color = QColor("#808080")
+                elif age > 4:
                     status_text = "Lag(Auth)"
                     color = QColor("#A9A9A9")
                 else:
                     status_text = "Auth"
-                    color = QColor("#00BFFF") # DeepSkyBlue
-            else:
+                    color = QColor("#00BFFF")
+            elif data["auth_status"] == "unauth":
                 if age > 10:
                     to_delete.append(ip)
                     continue
-                elif age > 3:
+                elif age > 4:
                     status_text = "Offline"
                     color = QColor("#808080")
+                else:
+                    status_text = "Online"
+                    color = QColor("#00FF00")
 
             item = data["item"]
             if not item:
@@ -200,7 +278,6 @@ class DRNStudioApp(QMainWindow):
                 index = self.tree.indexOfTopLevelItem(item)
                 self.tree.takeTopLevelItem(index)
             del self.nodes[ip]
-            self.log(f"[-] Removed inactive unauth agent: {ip}")
 
     def get_selected_ip(self):
         sel = self.tree.selectedItems()
@@ -227,7 +304,8 @@ class DRNStudioApp(QMainWindow):
     def on_handshake_finished(self, ip, success):
         if success:
             if ip in self.nodes:
-                self.nodes[ip]["auth"] = True
+                self.nodes[ip]["auth_status"] = "auth"
+                self.spawn_ping(ip)
             self.log(f"[+] Handshake SUCCESS with {ip}!")
         else:
             self.log(f"[-] Handshake FAILED with {ip}. Wrong password?")
